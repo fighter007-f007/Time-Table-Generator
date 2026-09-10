@@ -1,0 +1,15 @@
+1. Create a GitHub repository, preferably named student-timetable-generator.
+2. Upload all files/folders from this project.
+3. Keep the data folder in the repository.
+4. Do NOT add raw files containing student emails or other sensitive data.
+5. Go to https://share.streamlit.io/
+6. Sign in with GitHub.
+7. Create app.
+8. Select repository + main branch + streamlit_app.py.
+9. Deploy.
+10. Share the Streamlit URL with students.
+
+To update data later:
+- Replace files inside data/
+- Commit/push to GitHub
+- Streamlit Community Cloud redeploys from the repository.

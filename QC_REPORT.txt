@@ -1,0 +1,33 @@
+WEB APP BUILD / CORE QC — PASSED
+
+Actual supplied subject files used:
+CRM(1).xlsx
+MDT(1).xlsx
+SDT(1).xlsx
+SO(1).xlsx
+BRM(1).xlsx
+
+Actual supplied timetable:
+PGDM (2025-27) Term-V Time Table.pdf
+
+Test roll:
+25P060 — Yagyant Thacker
+
+PASS — Streamlit app source compiles
+PASS — Subject files sanitized (email sheets removed)
+PASS — Email/List false-section problem eliminated
+PASS — 5 valid course enrolments
+PASS — 10 classes
+PASS — 0 missing subjects
+PASS — PDF timetable parsing
+PASS — Section extraction
+PASS — Faculty initials
+PASS — Location
+PASS — Master timetable Excel output
+PASS — Copyable TXT output
+PASS — Student-facing input is only roll number
+
+Note: Streamlit itself is not installed in this build environment, so live
+browser rendering could not be launched here. The application source compiles
+successfully and its timetable/data core was executed against the supplied
+files.
