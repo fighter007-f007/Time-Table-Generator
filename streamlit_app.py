@@ -1135,15 +1135,17 @@ def render_master_grid(student):
         rows.append('<tr>'+''.join(cells)+'</tr>')
     return """
 <style>
-.tt{width:100%;border-collapse:collapse;table-layout:fixed}
-.tt th,.tt td{border:1px solid #777;text-align:center;vertical-align:middle;padding:6px}
-.tt .day{width:11%;background:#e8eef5;font-weight:700}
-.tt .period{background:#e8eef5;font-size:14px}
-.tt .time{background:#f4f6f8;font-size:12px}
+.tt{width:100%;border-collapse:collapse;table-layout:fixed;background:#0e1117;color:#f0f2f6}
+.tt th,.tt td{border:1px solid #3b414b;text-align:center;vertical-align:middle;padding:7px}
+.tt th{color:#f0f2f6}
+.tt .day{width:11%;background:#161b22;color:#f0f2f6;font-weight:700}
+.tt .period{background:#1b222c;color:#f0f2f6;font-size:14px}
+.tt .time{background:#11161d;color:#c9d1d9;font-size:12px}
+.tt tr td:not(.day){background:#0e1117;color:#f0f2f6}
 .tt td{height:92px;font-size:11px}
-.subject{font-size:14px;font-weight:700;margin-bottom:4px}
-.detail{font-size:11px;line-height:1.3}
-.sep{border:0;border-top:1px solid #bbb;margin:5px 0}
+.subject{font-size:14px;font-weight:700;color:#ffffff;margin-bottom:4px}
+.detail{font-size:11px;line-height:1.3;color:#e6edf3}
+.sep{border:0;border-top:1px solid #30363d;margin:5px 0}
 </style>
 """ + f"""
 <div style="text-align:center;margin-bottom:8px">
