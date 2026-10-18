@@ -5,6 +5,7 @@ import re
 import sys
 import tempfile
 import subprocess
+from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
 
@@ -1085,11 +1086,235 @@ MASTER_PERIODS = [
 ]
 
 def find_master_timetable():
-    pdfs=sorted(DATA_DIR.glob("*.pdf"))
-    if pdfs:
-        named=[p for p in pdfs if "timetable" in p.stem.lower()]
-        return (named or pdfs)[0]
-    return None
+    """Find the class timetable without accidentally choosing an exam date sheet."""
+    pdfs = sorted(DATA_DIR.glob("*.pdf"))
+    class_pdfs = [
+        p for p in pdfs
+        if not any(term in norm(p.stem) for term in ("exam", "datesheet", "examination"))
+    ]
+    named = [
+        p for p in class_pdfs
+        if re.search(r"time[\s_-]*table|timetable|schedule", p.stem, flags=re.I)
+    ]
+    return (named or class_pdfs or [None])[0]
+
+
+def find_exam_datesheet():
+    """Find the exam date-sheet PDF bundled in the repository's data folder."""
+    pdfs = sorted(DATA_DIR.glob("*.pdf"))
+    matches = [
+        p for p in pdfs
+        if ("exam" in norm(p.stem) and ("date" in norm(p.stem) or "sheet" in norm(p.stem)))
+        or "datesheet" in norm(p.stem)
+    ]
+    return matches[0] if matches else None
+
+
+EXAM_SUBJECT_NAMES = {
+    "brm": "Brand Management",
+    "mvw": "Marketing for Virtual World",
+    "crm": "Customer Relationship Management",
+    "bs": "Behavioral Strategy",
+    "og": "Organisational Governance",
+    "in": "Innovation Strategy",
+    "lmgb": "Locational AI, Mapping and Geospatial Business",
+    "so": "Sustainable Operations",
+    "sdt": "Systems and Design Thinking",
+    "bfbv": "Behavioural Finance and Business Valuation",
+    "pfp": "Personal Financial Planning",
+    "psf": "Project & Structured Finance",
+    "gees": "Global Economic Environment & Strategy",
+    "im": "International Marketing",
+    "mdt": "Managing Digital Transformation",
+    "nlpb": "Natural Language Processing for Business",
+    "rmbfi": "Risk Management in Banks and Financial Institutions",
+    "sm": "Sports Marketing",
+    "sdw": "Strategies in a Deglobalized World",
+}
+
+EXAM_DISPLAY_CODES = {
+    "brm": "BrM", "mvw": "MVW", "crm": "CRM", "bs": "BS", "og": "OG",
+    "in": "IN", "lmgb": "LMGB", "so": "SO", "sdt": "SDT", "bfbv": "BFBV",
+    "pfp": "PFP", "psf": "PSF", "gees": "GEES", "im": "IM", "mdt": "MDT",
+    "nlpb": "NLPB", "rmbfi": "RMBFI", "sm": "SM", "sdw": "SDW",
+}
+
+EXAM_NAME_ALIASES = {
+    norm(name): code for code, name in EXAM_SUBJECT_NAMES.items()
+}
+EXAM_NAME_ALIASES.update({
+    norm("Behavioral Finance and Business Valuation"): "bfbv",
+    norm("Organizational Governance"): "og",
+    norm("Global Economic Environment and Strategy"): "gees",
+    norm("Strategies in a Deglobalised World"): "sdw",
+    norm("Locational AI Mapping and Geospatial Business"): "lmgb",
+})
+
+
+def canonical_exam_code(subject):
+    key = norm(subject)
+    if key in EXAM_SUBJECT_NAMES:
+        return key
+    return EXAM_NAME_ALIASES.get(key, "")
+
+
+def parse_exam_datesheet_pdf(path):
+    """Read the Day/Date/Time table from the institute's exam date-sheet PDF."""
+    exam_rows = []
+    header_terms = ("10.15 am", "2.15 pm", "6.00 pm")
+    day_set = set(DAY_ORDER)
+    date_pattern = re.compile(r"([A-Za-z]+\s+\d{1,2},\s*\d{4})")
+
+    with pdfplumber.open(str(path)) as pdf:
+        for page in pdf.pages:
+            for table in page.find_tables():
+                rows = table.extract()
+                if not rows:
+                    continue
+
+                header_idx = None
+                for i, row in enumerate(rows[:5]):
+                    header_text = " ".join(clean(c).lower() for c in row if c)
+                    header_norm = header_text.replace(":", ".")
+                    if "day" in header_text and "date" in header_text and all(t in header_norm for t in header_terms):
+                        header_idx = i
+                        break
+                if header_idx is None:
+                    continue
+
+                header = rows[header_idx]
+                header_cells = table.rows[header_idx].cells
+                time_centers = []
+                for idx, value in enumerate(header):
+                    label = clean(value).lower().replace(":", ".")
+                    if "10.15 am" in label:
+                        time_label = "10:15 AM"
+                    elif "2.15 pm" in label:
+                        time_label = "2:15 PM"
+                    elif "6.00 pm" in label:
+                        time_label = "6:00 PM"
+                    else:
+                        continue
+                    bbox = header_cells[idx] if idx < len(header_cells) else None
+                    if bbox:
+                        time_centers.append((time_label, (bbox[0] + bbox[2]) / 2))
+
+                if len(time_centers) < 3:
+                    continue
+
+                for row_idx, row in enumerate(rows[header_idx + 1:], start=header_idx + 1):
+                    day = next((clean(c) for c in row if clean(c).title() in day_set), "")
+                    date_match = next((date_pattern.search(clean(c)) for c in row if date_pattern.search(clean(c))), None)
+                    if not day or not date_match:
+                        continue
+                    date_text = date_match.group(1)
+                    try:
+                        exam_date = datetime.strptime(date_text, "%B %d, %Y").date()
+                    except ValueError:
+                        continue
+
+                    data_cells = table.rows[row_idx].cells
+                    for idx, value in enumerate(row):
+                        cell_text = clean(value)
+                        if not cell_text or cell_text.title() in day_set or date_pattern.search(cell_text):
+                            continue
+                        # The exam grid uses merged cells. Use each cell's horizontal
+                        # centre to identify whether it belongs to the 10:15, 2:15,
+                        # or 6:00 PM session, preserving empty sessions on weekends.
+                        bbox = data_cells[idx] if idx < len(data_cells) else None
+                        if not bbox:
+                            continue
+                        center = (bbox[0] + bbox[2]) / 2
+                        nearest_time, nearest_center = min(time_centers, key=lambda x: abs(x[1] - center))
+                        distance = abs(nearest_center - center)
+                        if distance > 30:
+                            continue
+                        time_label = nearest_time
+
+                        codes = [clean(part) for part in re.split(r"[/,;|]+", cell_text) if clean(part)]
+                        for code in codes:
+                            code_key = canonical_exam_code(code)
+                            if not code_key:
+                                continue
+                            exam_rows.append({
+                                "day": exam_date.strftime("%A"),
+                                "date_obj": exam_date,
+                                "date": exam_date.strftime("%B %d, %Y"),
+                                "time": time_label,
+                                "code": EXAM_DISPLAY_CODES.get(code_key, code.upper()),
+                                "code_key": code_key,
+                                "subject": EXAM_SUBJECT_NAMES[code_key],
+                            })
+
+                # The date-sheet table has been parsed; don't inspect the faculty table.
+                if exam_rows:
+                    break
+            if exam_rows:
+                break
+
+    unique = []
+    seen = set()
+    for row in exam_rows:
+        key = (row["date"], row["time"], row["code_key"])
+        if key not in seen:
+            seen.add(key)
+            unique.append(row)
+
+    if not unique:
+        raise RuntimeError("The exam date-sheet PDF was found, but its Day/Date/Time table could not be read.")
+
+    time_order = {"10:15 AM": 1, "2:15 PM": 2, "6:00 PM": 3}
+    unique.sort(key=lambda x: (x["date_obj"], time_order.get(x["time"], 99), x["code"]))
+    return unique
+
+
+def build_student_exam_timetable(student, all_exams):
+    """Filter the exam date sheet to subjects found for this student's roll number."""
+    enrolled = {}
+    for record in student.get("courses", []):
+        code = canonical_exam_code(record.get("subject", ""))
+        if code:
+            enrolled[code] = EXAM_DISPLAY_CODES.get(code, record.get("subject", ""))
+
+    exams = [row for row in all_exams if row["code_key"] in enrolled]
+    found_codes = {row["code_key"] for row in exams}
+    unmapped = [
+        clean(record.get("subject", ""))
+        for record in student.get("courses", [])
+        if not canonical_exam_code(record.get("subject", ""))
+    ]
+    missing = [EXAM_DISPLAY_CODES.get(code, code.upper()) for code in enrolled if code not in found_codes]
+    return exams, sorted(set(missing)), sorted(set(unmapped))
+
+
+def render_exam_table(exams, student):
+    headers = ["DAY", "DATE", "TIME", "SUBJECT", "COURSE NAME"]
+    header_html = "".join(f"<th>{html.escape(h)}</th>" for h in headers)
+    body_rows = []
+    for item in exams:
+        values = [item["day"], item["date"], item["time"], item["code"], item["subject"]]
+        body_rows.append("<tr>" + "".join(f"<td>{html.escape(str(v))}</td>" for v in values) + "</tr>")
+    if not body_rows:
+        body_rows = ['<tr><td colspan="5" class="empty">No matching exams were found for the enrolled subjects.</td></tr>']
+    return f'''
+<style>
+.exam-wrap{{width:100%;overflow-x:auto;color:#f0f2f6}}
+.exam-table{{width:100%;border-collapse:collapse;table-layout:auto;background:#0e1117;color:#f0f2f6}}
+.exam-table th,.exam-table td{{border:1px solid #3b414b;padding:12px 14px;text-align:left;vertical-align:middle}}
+.exam-table th{{background:#1b222c;color:#f0f2f6;font-size:12px;letter-spacing:.04em}}
+.exam-table td{{background:#0e1117;color:#f0f2f6;font-size:14px}}
+.exam-table tr:nth-child(even) td{{background:#11161d}}
+.exam-table td:nth-child(4){{font-weight:700;color:#ffffff;white-space:nowrap}}
+.exam-table .empty{{text-align:center;color:#c9d1d9;padding:24px}}
+@media (max-width:700px){{.exam-table th,.exam-table td{{padding:8px;font-size:12px}}}}
+</style>
+<div style="text-align:center;margin:6px 0 14px 0">
+<div style="font-size:21px;font-weight:700">PERSONAL EXAM TIMETABLE</div>
+<div style="font-size:14px;margin-top:4px">{html.escape(student["name"])} · Roll No: {html.escape(student["roll"])}</div>
+<div style="font-size:12px;color:#c9d1d9;margin-top:4px">Mid-Term Examination · Dates and sessions from the official date sheet</div>
+</div>
+<div class="exam-wrap"><table class="exam-table"><thead><tr>{header_html}</tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>
+'''
 
 def canonical_period(period,time):
     p=clean(period).upper()
@@ -1164,30 +1389,30 @@ def make_downloads(student):
     finally:
         shutil.rmtree(tmp,ignore_errors=True)
 
-tt_path=find_master_timetable()
+tt_path = find_master_timetable()
 if not tt_path:
-    st.error("The administrator has not installed a timetable.")
+    st.error("The administrator has not installed a class timetable.")
     st.stop()
 
 st.markdown(
     "<h1 style='text-align:center;margin-bottom:0'>📅 Student Timetable Generator</h1>"
-    "<p style='text-align:center;margin-top:4px'>Enter your roll number to view your personal timetable.</p>",
-    unsafe_allow_html=True
+    "<p style='text-align:center;margin-top:4px'>Enter your roll number to view your personal class and exam timetables.</p>",
+    unsafe_allow_html=True,
 )
 
 with st.form("roll_form"):
-    roll=st.text_input("Roll Number",placeholder="e.g. 25P060")
-    submitted=st.form_submit_button("Generate My Timetable")
+    roll = st.text_input("Roll Number", placeholder="e.g. 25P060")
+    submitted = st.form_submit_button("Generate My Timetables", use_container_width=True)
 
 if submitted:
-    roll=normalize_roll(roll)
+    roll = normalize_roll(roll)
     if not roll:
         st.warning("Please enter your roll number.")
         st.stop()
     try:
-        records=parse_all_subject_files(DATA_DIR,tt_path)
-        timetable=parse_timetable(tt_path)
-        student,_,errors=build_student_timetable(records,timetable,roll)
+        records = parse_all_subject_files(DATA_DIR, tt_path)
+        timetable = parse_timetable(tt_path)
+        student, _, errors = build_student_timetable(records, timetable, roll)
     except Exception as e:
         st.error(f"Could not generate the timetable: {e}")
         st.stop()
@@ -1196,22 +1421,73 @@ if submitted:
         st.error(f"Roll number {roll} was not found.")
         st.stop()
 
-    if student["missing"]:
-        st.warning("Some enrolled subjects could not be matched: "+", ".join(student["missing"]))
+    exam_datesheet_path = find_exam_datesheet()
+    all_exams = None
+    exam_error = ""
+    if exam_datesheet_path:
+        try:
+            all_exams = parse_exam_datesheet_pdf(exam_datesheet_path)
+        except Exception as e:
+            exam_error = str(e)
 
-    st.success(f'Generated timetable for {student["name"]} ({student["roll"]}) — {len(student["schedule"])} class entries.')
-    st.markdown(render_master_grid(student),unsafe_allow_html=True)
+    class_tab, exam_tab = st.tabs(["📚 Class Timetable", "📝 Exam Timetable"])
 
-    xb,tb=make_downloads(student)
-    c1,c2=st.columns(2)
-    with c1:
-        st.download_button("Download Excel Timetable",xb,
-            file_name=f"{student['roll']}_timetable.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True)
-    with c2:
-        st.download_button("Download Copyable Timetable",tb,
-            file_name=f"{student['roll']}_timetable.txt",
-            mime="text/plain",use_container_width=True)
+    with class_tab:
+        if student["missing"]:
+            st.warning("Some enrolled subjects could not be matched to a class slot: " + ", ".join(student["missing"]))
+        st.success(
+            f'Generated class timetable for {student["name"]} ({student["roll"]}) — '
+            f'{len(student["schedule"])} class entries.'
+        )
+        st.markdown(render_master_grid(student), unsafe_allow_html=True)
+
+        xb, tb = make_downloads(student)
+        c1, c2 = st.columns(2)
+        with c1:
+            st.download_button(
+                "Download Excel Timetable", xb,
+                file_name=f"{student['roll']}_class_timetable.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
+        with c2:
+            st.download_button(
+                "Download Copyable Timetable", tb,
+                file_name=f"{student['roll']}_class_timetable.txt",
+                mime="text/plain",
+                use_container_width=True,
+            )
+
+    with exam_tab:
+        if not exam_datesheet_path:
+            st.warning(
+                "The exam date-sheet PDF is not installed. Upload it to the repository's `data/` folder "
+                "with a filename containing 'Exam' and 'DateSheet' (or 'Date Sheet')."
+            )
+        elif exam_error:
+            st.error(f"Could not read the exam date sheet: {exam_error}")
+        else:
+            exam_rows, missing_exams, unmapped_subjects = build_student_exam_timetable(student, all_exams)
+            if exam_rows:
+                st.success(f"Found {len(exam_rows)} exam(s) for {student['name']} ({student['roll']}).")
+            st.markdown(render_exam_table(exam_rows, student), unsafe_allow_html=True)
+
+            if missing_exams:
+                st.info("These enrolled subjects were not listed in the supplied exam date sheet: " + ", ".join(missing_exams))
+            if unmapped_subjects:
+                st.caption("These subject list(s) could not be matched to a known exam abbreviation: " + ", ".join(unmapped_subjects))
+
+            if exam_rows:
+                export_df = pd.DataFrame([
+                    {"Day": x["day"], "Date": x["date"], "Time": x["time"], "Subject Code": x["code"], "Subject": x["subject"]}
+                    for x in exam_rows
+                ])
+                st.download_button(
+                    "Download Exam Timetable (CSV)",
+                    export_df.to_csv(index=False).encode("utf-8-sig"),
+                    file_name=f"{student['roll']}_exam_timetable.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
 else:
-    st.info("Enter your roll number and press Enter or click Generate My Timetable.")
+    st.info("Enter your roll number and press Enter or click Generate My Timetables.")
