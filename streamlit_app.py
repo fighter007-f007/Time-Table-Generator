@@ -1390,96 +1390,266 @@ def _student_slot_lookup(student):
     return lookup
 
 
-def render_comparison_grid(students):
-    """Render a dark, horizontally scrollable comparison grid for up to six students."""
-    slot_lookups = [_student_slot_lookup(person) for person in students]
+def render_comparison_person_grid(student, students, person_idx):
+    """Render one person's timetable in the same DAY x PERIOD layout as the main timetable.
 
-    # An identical subject/section in the same slot is marked as a shared class.
+    Classes shared with at least one other person are highlighted in green.
+    """
+    slot_lookups = [_student_slot_lookup(person) for person in students]
     shared_people = defaultdict(set)
-    for person_idx, lookup in enumerate(slot_lookups):
+    for idx, lookup in enumerate(slot_lookups):
         for (day, period), items in lookup.items():
             for item in items:
                 course_key = (norm(item.get("subject", "")), norm(item.get("section", "")))
                 if course_key[0]:
-                    shared_people[(day, period, course_key)].add(person_idx)
+                    shared_people[(day, period, course_key)].add(idx)
 
-    head_cells = [
-        '<th class="axis">DAY</th>',
-        '<th class="axis">PERIOD</th>',
-        '<th class="axis time-axis">TIME</th>',
+    lookup = slot_lookups[person_idx]
+    rows = [
+        '<tr><th rowspan="2" class="day">DAY</th>' + ''.join(
+            f'<th class="period">{html.escape(period)}</th>' for period, _ in MASTER_PERIODS
+        ) + '</tr>',
+        '<tr>' + ''.join(
+            f'<th class="time">{html.escape(time_label)}</th>' for _, time_label in MASTER_PERIODS
+        ) + '</tr>'
     ]
-    for idx, person in enumerate(students):
-        name = clean(person.get("name", "")) or ("You" if idx == 0 else f"Friend {idx}")
-        who = "You" if idx == 0 else f"Friend {idx}"
-        head_cells.append(
-            '<th class="person-head">' + html.escape(who) +
-            '<small>' + html.escape(name + " · " + person["roll"]) + '</small></th>'
-        )
 
-    rows = []
-    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    for day in weekdays:
-        for period, time_label in MASTER_PERIODS:
-            cells = [
-                '<td class="day-cell">' + html.escape(day) + '</td>',
-                '<td class="period-cell">' + html.escape(period) + '</td>',
-                '<td class="time-cell">' + html.escape(time_label) + '</td>',
-            ]
-            for person_idx, lookup in enumerate(slot_lookups):
-                entries = lookup.get((day, period), [])
-                if not entries:
-                    cells.append('<td class="free-cell"><span>Free</span></td>')
-                    continue
-                blocks = []
-                for item in entries:
-                    subject = clean(item.get("subject", "")) or "Class"
-                    section = clean(item.get("section", ""))
-                    room = clean(item.get("room", ""))
-                    faculty = clean(item.get("faculty", ""))
-                    course_key = (norm(subject), norm(section))
-                    is_shared = len(shared_people.get((day, period, course_key), set())) > 1
-                    details = []
-                    if section:
-                        details.append("Section " + section)
-                    if room:
-                        details.append(room)
-                    if faculty:
-                        details.append(faculty)
-                    blocks.append(
-                        '<div class="course-block' + (' shared' if is_shared else '') + '">' +
-                        '<div class="course-title">' + html.escape(subject) + '</div>' +
-                        ('<div class="course-details">' + html.escape(" · ".join(details)) + '</div>' if details else '') +
-                        ('<span class="shared-tag">SAME CLASS</span>' if is_shared else '') +
-                        '</div>'
-                    )
-                cells.append('<td class="busy-cell">' + ''.join(blocks) + '</td>')
-            rows.append('<tr>' + ''.join(cells) + '</tr>')
+    for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+        cells = [f'<td class="day">{html.escape(day)}</td>']
+        for period, _ in MASTER_PERIODS:
+            entries = lookup.get((day, period), [])
+            if not entries:
+                cells.append('<td></td>')
+                continue
 
-    return """
+            blocks = []
+            any_shared = False
+            for item in entries:
+                subject = clean(item.get("subject", "")) or "Class"
+                section = clean(item.get("section", ""))
+                room = clean(item.get("room", ""))
+                faculty = clean(item.get("faculty", ""))
+                course_key = (norm(subject), norm(section))
+                is_shared = len(shared_people.get((day, period, course_key), set())) > 1
+                any_shared = any_shared or is_shared
+                details = []
+                if section:
+                    details.append("Section: " + section)
+                if faculty:
+                    details.append("Faculty: " + faculty)
+                if room:
+                    details.append("Location: " + room)
+                blocks.append(
+                    '<div class="compare-course' + (' is-shared' if is_shared else '') + '">'
+                    '<div class="compare-subject">' + html.escape(subject) + '</div>'
+                    + ''.join('<div class="compare-detail">' + html.escape(v) + '</div>' for v in details)
+                    + ('<span class="compare-shared-tag">COMMON CLASS</span>' if is_shared else '')
+                    + '</div>'
+                )
+            cell_class = ' class="shared-cell"' if any_shared else ''
+            cells.append('<td' + cell_class + '>' + '<hr class="compare-sep">'.join(blocks) + '</td>')
+        rows.append('<tr>' + ''.join(cells) + '</tr>')
+
+    name = clean(student.get("name", "")) or ("You" if person_idx == 0 else f"Friend {person_idx}")
+    role = "You" if person_idx == 0 else f"Friend {person_idx}"
+    return f'''
 <style>
-.compare-wrap{width:100%;overflow-x:auto;color:#f0f2f6;border:1px solid #30363d;border-radius:8px}
-.compare-table{width:100%;min-width:980px;border-collapse:collapse;table-layout:auto;background:#0e1117;color:#f0f2f6}
-.compare-table th,.compare-table td{border:1px solid #30363d;padding:8px 9px;text-align:center;vertical-align:middle}
-.compare-table th{background:#1b222c;color:#f0f2f6;font-size:12px;white-space:nowrap}
-.compare-table th small{display:block;font-size:10px;font-weight:400;color:#c9d1d9;margin-top:4px;white-space:normal}
-.compare-table .axis{position:sticky;top:0;z-index:1}
-.compare-table .day-cell{background:#161b22;font-weight:700;white-space:nowrap}
-.compare-table .period-cell{background:#161b22;font-weight:700}
-.compare-table .time-cell{background:#11161d;color:#c9d1d9;font-size:11px;min-width:112px;white-space:nowrap}
-.compare-table td{min-width:130px;font-size:12px}
-.compare-table .free-cell{background:#0e1117;color:#7d8590;font-size:11px}
-.compare-table .busy-cell{background:#0e1117}
-.course-block{position:relative;margin:2px 0;padding:6px 5px;border:1px solid #30363d;border-radius:6px;background:#11161d}
-.course-block.shared{border-color:#2f855a;background:#10251d}
-.course-title{font-size:13px;font-weight:700;color:#f0f2f6}
-.course-details{font-size:10px;line-height:1.35;color:#c9d1d9;margin-top:3px}
-.shared-tag{display:inline-block;margin-top:4px;border-radius:3px;background:#22543d;color:#d1fae5;font-size:9px;font-weight:700;padding:2px 4px}
-@media(max-width:700px){.compare-table th,.compare-table td{padding:6px;font-size:11px}.course-title{font-size:12px}}
+.tt-compare{{width:100%;border-collapse:collapse;table-layout:fixed;background:#0e1117;color:#f0f2f6}}
+.tt-compare th,.tt-compare td{{border:1px solid #3b414b;text-align:center;vertical-align:middle;padding:7px}}
+.tt-compare th{{color:#f0f2f6}}
+.tt-compare .day{{width:11%;background:#161b22;color:#f0f2f6;font-weight:700}}
+.tt-compare .period{{background:#1b222c;color:#f0f2f6;font-size:14px}}
+.tt-compare .time{{background:#11161d;color:#c9d1d9;font-size:12px}}
+.tt-compare tr td:not(.day){{background:#0e1117;color:#f0f2f6}}
+.tt-compare td{{height:92px;font-size:11px}}
+.tt-compare td.shared-cell{{background:#10251d!important;border-color:#2f855a}}
+.compare-subject{{font-size:14px;font-weight:700;color:#ffffff;margin-bottom:4px}}
+.compare-detail{{font-size:11px;line-height:1.3;color:#e6edf3}}
+.compare-course.is-shared{{border:1px solid #2f855a;border-radius:5px;padding:4px;background:#10251d}}
+.compare-shared-tag{{display:inline-block;margin-top:4px;border-radius:3px;background:#22543d;color:#d1fae5;font-size:9px;font-weight:700;padding:2px 4px}}
+.compare-sep{{border:0;border-top:1px solid #30363d;margin:5px 0}}
+@media(max-width:700px){{.tt-compare th,.tt-compare td{{padding:5px;font-size:10px}}.compare-subject{{font-size:12px}}.compare-detail{{font-size:10px}}}}
 </style>
-<div class="compare-wrap"><table class="compare-table"><thead><tr>""" + ''.join(head_cells) + """</tr></thead><tbody>""" + ''.join(rows) + """</tbody></table></div>
-<p style="color:#9da7b3;font-size:11px;margin-top:7px">Cells marked SAME CLASS indicate students with the same subject and section at the same time. Scroll horizontally to see all students.</p>
-"""
+<div style="text-align:center;margin-bottom:8px">
+<div style="font-size:20px;font-weight:700">MANAGEMENT DEVELOPMENT INSTITUTE GURGAON</div>
+<div style="font-size:16px;font-weight:600">PERSONAL TIME TABLE — {html.escape(name)}</div>
+<div style="font-size:13px">{html.escape(role)} · Roll No: {html.escape(student["roll"])}</div>
+<div style="font-size:11px;color:#a7f3d0;margin-top:4px">Green cells marked COMMON CLASS are shared with at least one other student.</div>
+</div>
+<table class="tt-compare"><tbody>{''.join(rows)}</tbody></table>
+'''
 
+def render_comparison_combined_grid(students):
+    """Render one combined Monday-Friday grid for all compared students.
+
+    Each class is shown once per day/period. If multiple students share the
+    same subject and section in that slot, their labels are grouped together
+    and the class block is highlighted green.
+    """
+    grouped = defaultdict(lambda: {"item": None, "people": set()})
+    slot_groups = defaultdict(list)
+
+    for person_idx, person in enumerate(students):
+        for item in person.get("schedule", []):
+            day = clean(item.get("day", ""))
+            period = canonical_period(item.get("period", ""), item.get("time", ""))
+            subject = clean(item.get("subject", "")) or "Class"
+            section = clean(item.get("section", ""))
+            faculty = clean(item.get("faculty", ""))
+            room = clean(item.get("room", ""))
+            course_key = (day, period, norm(subject), norm(section))
+            entry = grouped[course_key]
+            if entry["item"] is None:
+                entry["item"] = {
+                    "day": day, "period": period, "subject": subject,
+                    "section": section, "faculty": faculty, "room": room,
+                }
+                slot_groups[(day, period)].append(course_key)
+            entry["people"].add(person_idx)
+
+    rows = [
+        '<tr><th rowspan="2" class="day">DAY</th>' + ''.join(
+            f'<th class="period">{html.escape(period)}</th>' for period, _ in MASTER_PERIODS
+        ) + '</tr>',
+        '<tr>' + ''.join(
+            f'<th class="time">{html.escape(time_label)}</th>' for _, time_label in MASTER_PERIODS
+        ) + '</tr>'
+    ]
+
+    def person_label(idx):
+        person = students[idx]
+        role = "YOU" if idx == 0 else f"F{idx}"
+        return f"{role} · {clean(person.get('roll', ''))}"
+
+    for day in ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]:
+        cells = [f'<td class="day">{html.escape(day)}</td>']
+        for period, _ in MASTER_PERIODS:
+            keys = slot_groups.get((day, period), [])
+            if not keys:
+                cells.append('<td class="empty-slot"><span>—</span></td>')
+                continue
+
+            blocks = []
+            for key in keys:
+                entry = grouped[key]
+                item = entry["item"]
+                people = sorted(entry["people"])
+                is_shared = len(people) > 1
+                details = []
+                if item["section"]:
+                    details.append("Section " + item["section"])
+                if item["faculty"]:
+                    details.append(item["faculty"])
+                if item["room"]:
+                    details.append(item["room"])
+                participants = '<br>'.join(html.escape(person_label(idx)) for idx in people)
+                blocks.append(
+                    '<div class="combined-course' + (' is-shared' if is_shared else '') + '">'
+                    '<div class="combined-subject">' + html.escape(item["subject"]) + '</div>'
+                    + ('<div class="combined-detail">' + html.escape(' · '.join(details)) + '</div>' if details else '')
+                    + '<div class="combined-people">' + participants + '</div>'
+                    + ('<span class="combined-shared-tag">SHARED</span>' if is_shared else '')
+                    + '</div>'
+                )
+            cells.append('<td>' + '<hr class="combined-sep">'.join(blocks) + '</td>')
+        rows.append('<tr>' + ''.join(cells) + '</tr>')
+
+    roster = []
+    for idx, person in enumerate(students):
+        role = "You" if idx == 0 else f"Friend {idx}"
+        name = clean(person.get("name", ""))
+        roll = clean(person.get("roll", ""))
+        label = f"{role}: {name} ({roll})" if name else f"{role}: {roll}"
+        roster.append('<span class="combined-roster-item">' + html.escape(label) + '</span>')
+
+    return f'''
+<style>
+.tt-combined-wrap{{width:100%;color:#f0f2f6}}
+.tt-combined{{width:100%;border-collapse:collapse;table-layout:fixed;background:#0e1117;color:#f0f2f6}}
+.tt-combined th,.tt-combined td{{border:1px solid #3b414b;text-align:center;vertical-align:top;padding:5px;overflow-wrap:anywhere}}
+.tt-combined th{{color:#f0f2f6}}
+.tt-combined .day{{width:10%;background:#161b22;color:#f0f2f6;font-weight:700;vertical-align:middle}}
+.tt-combined .period{{background:#1b222c;color:#f0f2f6;font-size:13px;vertical-align:middle}}
+.tt-combined .time{{background:#11161d;color:#c9d1d9;font-size:11px;vertical-align:middle}}
+.tt-combined td{{background:#0e1117;color:#f0f2f6;min-height:68px;font-size:10px}}
+.tt-combined td.empty-slot{{vertical-align:middle;color:#586170}}
+.combined-course{{border:1px solid #343b46;border-radius:5px;padding:5px;margin:2px 0;background:#151b23;text-align:left}}
+.combined-course.is-shared{{background:#10251d;border-color:#2f855a}}
+.combined-subject{{font-size:12px;font-weight:800;color:#ffffff;line-height:1.2;margin-bottom:3px}}
+.combined-detail{{font-size:10px;color:#d5dde7;line-height:1.25;margin-bottom:3px}}
+.combined-people{{font-size:10px;color:#c8d6e5;line-height:1.3}}
+.combined-shared-tag{{display:inline-block;margin-top:4px;border-radius:3px;background:#22543d;color:#d1fae5;font-size:8px;font-weight:800;padding:2px 4px;letter-spacing:.04em}}
+.combined-sep{{border:0;border-top:1px solid #30363d;margin:5px 0}}
+.combined-roster{{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin:8px 0 12px}}
+.combined-roster-item{{display:inline-block;border:1px solid #394352;border-radius:5px;background:#161b22;color:#dce4ed;padding:5px 8px;font-size:11px}}
+@media(max-width:850px){{.tt-combined th,.tt-combined td{{padding:3px}}.tt-combined .day{{width:11%;font-size:10px}}.tt-combined .period{{font-size:11px}}.tt-combined .time{{font-size:9px}}.combined-course{{padding:3px}}.combined-subject{{font-size:10px}}.combined-detail,.combined-people{{font-size:9px}}}}
+</style>
+<div style="text-align:center;margin-bottom:5px">
+<div style="font-size:20px;font-weight:700">COMBINED CLASS TIMETABLE</div>
+<div style="font-size:12px;color:#c9d1d9;margin-top:3px">Every class for everyone is shown in one grid. Green blocks indicate the same subject and section at the same time.</div>
+</div>
+<div class="combined-roster">{''.join(roster)}</div>
+<div class="tt-combined-wrap"><table class="tt-combined"><tbody>{''.join(rows)}</tbody></table></div>
+'''
+
+
+def render_combined_exam_table(students, all_exams):
+    """Render all compared students' exams in a single grouped table."""
+    grouped = {}
+    time_order = {"10:15 AM": 1, "2:15 PM": 2, "6:00 PM": 3}
+    for idx, person in enumerate(students):
+        exams, _, _ = build_student_exam_timetable(person, all_exams)
+        for exam in exams:
+            key = (exam.get("date"), exam.get("time"), exam.get("code_key", norm(exam.get("code", ""))))
+            if key not in grouped:
+                grouped[key] = {"exam": exam, "people": set()}
+            grouped[key]["people"].add(idx)
+
+    def label_for(idx):
+        person = students[idx]
+        role = "You" if idx == 0 else f"Friend {idx}"
+        name = clean(person.get("name", ""))
+        return f"{role} · {name} ({person['roll']})" if name else f"{role} · {person['roll']}"
+
+    ordered = sorted(
+        grouped.values(),
+        key=lambda entry: (
+            entry["exam"].get("date_obj", datetime.max),
+            time_order.get(entry["exam"].get("time", ""), 99),
+            clean(entry["exam"].get("code", "")),
+        ),
+    )
+    body_rows = []
+    for entry in ordered:
+        exam = entry["exam"]
+        people = sorted(entry["people"])
+        shared = len(people) > 1
+        people_html = '<br>'.join(html.escape(label_for(idx)) for idx in people)
+        body_rows.append(
+            '<tr' + (' class="shared-exam-row"' if shared else '') + '>'
+            + ''.join('<td>' + html.escape(str(value)) + '</td>' for value in [exam["day"], exam["date"], exam["time"], exam["code"], exam["subject"]])
+            + '<td><div class="exam-participants">' + people_html + '</div>'
+            + ('<span class="combined-shared-tag">SAME EXAM SESSION</span>' if shared else '') + '</td></tr>'
+        )
+    if not body_rows:
+        body_rows.append('<tr><td colspan="6" class="empty">No matching exams found for the entered students.</td></tr>')
+
+    return f'''
+<style>
+.combined-exam-wrap{{width:100%;color:#f0f2f6}}
+.combined-exam-table{{width:100%;border-collapse:collapse;table-layout:auto;background:#0e1117;color:#f0f2f6}}
+.combined-exam-table th,.combined-exam-table td{{border:1px solid #3b414b;padding:9px 10px;text-align:left;vertical-align:middle}}
+.combined-exam-table th{{background:#1b222c;color:#f0f2f6;font-size:11px;letter-spacing:.04em}}
+.combined-exam-table td{{background:#0e1117;color:#f0f2f6;font-size:12px}}
+.combined-exam-table tr:nth-child(even) td{{background:#11161d}}
+.combined-exam-table tr.shared-exam-row td{{background:#10251d;border-color:#2f855a}}
+.combined-exam-table td:nth-child(4){{font-weight:800;white-space:nowrap}}
+.combined-exam-table .empty{{text-align:center;color:#c9d1d9;padding:22px}}
+.exam-participants{{line-height:1.5}}
+@media(max-width:700px){{.combined-exam-table th,.combined-exam-table td{{padding:6px;font-size:10px}}}}
+</style>
+<div class="combined-exam-wrap"><table class="combined-exam-table"><thead><tr><th>DAY</th><th>DATE</th><th>TIME</th><th>CODE</th><th>COURSE</th><th>WHO HAS THE EXAM</th></tr></thead><tbody>{''.join(body_rows)}</tbody></table></div>
+'''
 
 def comparison_summary(students):
     """Return identical classes and slots when every compared student is free."""
@@ -1717,8 +1887,8 @@ if submitted:
     if len(students) > 1:
         compare_tab = tabs[2]
         with compare_tab:
-            st.markdown("### Class schedule comparison")
-            st.caption("Compare up to six students in the same day-and-period grid. Matching subjects and sections are highlighted.")
+            st.markdown("### Compare Class Timetables")
+            st.caption("One shared Monday–Friday, Period I–VI grid for everyone. Each class block shows who has it; green blocks mark shared classes.")
             shared_rows, common_free = comparison_summary(students)
             metric_col1, metric_col2, metric_col3 = st.columns(3)
             with metric_col1:
@@ -1726,41 +1896,40 @@ if submitted:
             with metric_col2:
                 st.metric("Shared class slots", len(shared_rows))
             with metric_col3:
-                st.metric("Common free slots", len(common_free))
+                st.metric("Common free periods", len(common_free))
 
-            st.markdown(render_comparison_grid(students), unsafe_allow_html=True)
-
-            if shared_rows:
-                st.markdown("#### Classes you share")
-                st.dataframe(pd.DataFrame(shared_rows), use_container_width=True, hide_index=True)
-            else:
-                st.info("No identical subject-and-section sessions were found. The grid above still shows each person's classes and free periods.")
+            missing_by_person = []
+            for idx, person in enumerate(students):
+                if person.get("missing"):
+                    role = "You" if idx == 0 else f"Friend {idx}"
+                    missing_by_person.append(f"{role} ({person['roll']}): " + ", ".join(person["missing"]))
+            if missing_by_person:
+                st.warning("Some subjects could not be matched to a class slot — " + " | ".join(missing_by_person))
+            st.markdown(render_comparison_combined_grid(students), unsafe_allow_html=True)
 
             if common_free:
-                common_free_df = pd.DataFrame(common_free)
-                with st.expander("Show all common free class slots"):
-                    st.dataframe(common_free_df, use_container_width=True, hide_index=True)
+                with st.expander("Show common free periods"):
+                    st.dataframe(pd.DataFrame(common_free), use_container_width=True, hide_index=True)
 
-            for person in students:
-                if person.get("missing"):
-                    who = "You" if person["roll"] == roll else f"{person.get('name') or person['roll']} ({person['roll']})"
-                    st.caption(f"Subjects without a class-slot match for {who}: " + ", ".join(person["missing"]))
-
-            st.markdown("### Exam schedule comparison")
+            st.markdown("### Compare Exam Timetables")
             if exam_error:
                 st.warning(f"Could not build the exam comparison: {exam_error}")
             elif not all_exams:
                 st.info("An exam date-sheet PDF is not installed, so exam comparison is unavailable.")
             else:
+                st.caption("All matching exams are combined below. Each row identifies who has that exam; green rows mean multiple people have the same exam in the same session.")
+                st.markdown(render_combined_exam_table(students, all_exams), unsafe_allow_html=True)
+
                 exam_compare_df = build_exam_comparison(students, all_exams)
                 if not exam_compare_df.empty:
-                    st.dataframe(exam_compare_df, use_container_width=True, hide_index=True)
-                    st.download_button(
-                        "Download Comparison (CSV)",
-                        exam_compare_df.to_csv(index=False).encode("utf-8-sig"),
-                        file_name=f"{roll}_friends_timetable_comparison.csv",
-                        mime="text/csv",
-                        use_container_width=True,
-                    )
+                    with st.expander("Download combined exam comparison"):
+                        st.caption("Optional CSV with each student's exam in each official session.")
+                        st.download_button(
+                            "Download Exam Comparison (CSV)",
+                            exam_compare_df.to_csv(index=False).encode("utf-8-sig"),
+                            file_name=f"{roll}_friends_exam_comparison.csv",
+                            mime="text/csv",
+                            use_container_width=True,
+                        )
 else:
     st.info("Enter your roll number, add up to five friends if needed, and press Enter or click Generate Timetables.")
